@@ -10,6 +10,12 @@ const SUPPORTED_LANGUAGES = [
   { code: 'si-LK', name: 'සිංහල (Sri Lanka)', flag: '🇱🇰' },
 ];
 
+// Detect if we're on mobile
+const isMobile = () => {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+         (navigator.maxTouchPoints && navigator.maxTouchPoints > 2 && /MacIntel/.test(navigator.platform));
+};
+
 const VoiceRecorder = ({ onTranscript, disabled = false }) => {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -17,13 +23,20 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
   const [selectedLanguage, setSelectedLanguage] = useState('en-US');
   const [confidence, setConfidence] = useState(0);
   const [showLanguageDropdown, setShowLanguageDropdown] = useState(false);
-  const [fullTranscript, setFullTranscript] = useState(''); // Store complete transcript
+  const [accumulatedTranscript, setAccumulatedTranscript] = useState('');
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
   
   const recognitionRef = useRef(null);
   const dropdownRef = useRef(null);
-  const shouldContinueListeningRef = useRef(false); // Flag to control continuous listening
+  const shouldContinueRef = useRef(false);
   const restartTimeoutRef = useRef(null);
-  const isRestartingRef = useRef(false); // Prevent multiple restarts
+  const isRestartingRef = useRef(false);
+  const lastRestartTimeRef = useRef(0);
+
+  // Detect mobile on mount
+  useEffect(() => {
+    setIsMobileDevice(isMobile());
+  }, []);
 
   // Load saved language preference
   useEffect(() => {
@@ -56,27 +69,43 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     }
 
     return () => {
-      shouldContinueListeningRef.current = false;
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {
-          // Ignore errors on cleanup
-        }
-      }
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current);
-      }
+      cleanup();
     };
   }, [selectedLanguage, onTranscript]);
+
+  const cleanup = () => {
+    shouldContinueRef.current = false;
+    isRestartingRef.current = false;
+    
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+    
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+  };
 
   const initializeSpeechRecognition = () => {
     const SpeechRecognition = getSpeechRecognition();
     recognitionRef.current = new SpeechRecognition();
     
-    // Configuration for speech recognition
-    recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true;
+    // Different settings for mobile vs desktop
+    if (isMobileDevice) {
+      // Conservative settings for mobile
+      recognitionRef.current.continuous = false; // Less aggressive on mobile
+      recognitionRef.current.interimResults = true;
+    } else {
+      // Aggressive settings for desktop
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+    }
+    
     recognitionRef.current.lang = selectedLanguage;
     recognitionRef.current.maxAlternatives = 1;
 
@@ -85,7 +114,6 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
       let finalTranscript = '';
       let bestConfidence = 0;
 
-      // Process all results
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
         const transcriptPart = result[0].transcript;
@@ -99,20 +127,20 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
         }
       }
 
-      // Update the display transcript (interim + any new final)
-      const displayTranscript = fullTranscript + finalTranscript + interimTranscript;
-      setTranscript(displayTranscript);
+      // Update display
+      const currentDisplay = accumulatedTranscript + finalTranscript + interimTranscript;
+      setTranscript(currentDisplay);
       setConfidence(bestConfidence || (interimTranscript ? 0.8 : 0));
       
-      // If we have final transcript, add it to our full transcript
+      // Save final transcript
       if (finalTranscript) {
-        const newFullTranscript = fullTranscript + finalTranscript;
-        setFullTranscript(newFullTranscript);
-        // Don't call onTranscript yet - wait until user stops recording
+        const newAccumulated = accumulatedTranscript + finalTranscript;
+        setAccumulatedTranscript(newAccumulated);
         logEvent('voice_transcript_partial', { 
           length: finalTranscript.length, 
           language: selectedLanguage,
-          confidence: bestConfidence 
+          confidence: bestConfidence,
+          isMobile: isMobileDevice
         });
       }
     };
@@ -122,120 +150,156 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
       
       logEvent('voice_recognition_error', { 
         error: event.error,
-        language: selectedLanguage 
+        language: selectedLanguage,
+        isMobile: isMobileDevice
       });
       
-      // Handle different error types
+      // Handle errors differently on mobile
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setTranscript('Microphone access denied. Please allow microphone access and try again.');
-        shouldContinueListeningRef.current = false;
+        setTranscript('Microphone access denied. Please allow microphone access.');
+        shouldContinueRef.current = false;
         setIsListening(false);
       } else if (event.error === 'network') {
-        setTranscript('Network error. Trying to reconnect...');
-        // Try to restart on network errors
-        if (shouldContinueListeningRef.current) {
-          restartRecognition();
+        if (isMobileDevice) {
+          setTranscript('Network issue. Please try again.');
+          // Don't auto-restart on mobile network errors
+          shouldContinueRef.current = false;
+          setIsListening(false);
+        } else {
+          setTranscript('Network error. Reconnecting...');
+          if (shouldContinueRef.current) {
+            attemptRestart();
+          }
         }
       } else {
-        // For other errors, just try to continue
-        console.log('Non-critical error, continuing...', event.error);
-        if (shouldContinueListeningRef.current && !isRestartingRef.current) {
-          restartRecognition();
+        // Other errors - handle conservatively on mobile
+        if (isMobileDevice) {
+          console.log('Mobile: Error occurred, stopping to prevent issues:', event.error);
+          shouldContinueRef.current = false;
+          setIsListening(false);
+        } else {
+          console.log('Desktop: Non-critical error, attempting to continue:', event.error);
+          if (shouldContinueRef.current && !isRestartingRef.current) {
+            attemptRestart();
+          }
         }
       }
     };
 
     recognitionRef.current.onend = () => {
-      console.log('Recognition ended. Should continue:', shouldContinueListeningRef.current);
+      console.log('Recognition ended. Should continue:', shouldContinueRef.current, 'Is mobile:', isMobileDevice);
       
-      // If we should continue listening and we're not already restarting, restart immediately
-      if (shouldContinueListeningRef.current && !isRestartingRef.current) {
-        console.log('Auto-restarting recognition to maintain continuous listening...');
-        restartRecognition();
-      } else if (!shouldContinueListeningRef.current) {
-        // User stopped, finalize the session
+      if (shouldContinueRef.current && !isRestartingRef.current) {
+        if (isMobileDevice) {
+          // On mobile, be more conservative with restarts
+          const now = Date.now();
+          const timeSinceLastRestart = now - lastRestartTimeRef.current;
+          
+          if (timeSinceLastRestart > 1000) { // At least 1 second between restarts
+            console.log('Mobile: Attempting careful restart...');
+            attemptRestart();
+          } else {
+            console.log('Mobile: Too soon for restart, stopping to prevent loops');
+            shouldContinueRef.current = false;
+            setIsListening(false);
+            finalizeRecording();
+          }
+        } else {
+          // Desktop: More aggressive restart
+          console.log('Desktop: Auto-restarting...');
+          attemptRestart();
+        }
+      } else if (!shouldContinueRef.current) {
         finalizeRecording();
       }
     };
 
     recognitionRef.current.onstart = () => {
-      console.log('Speech recognition started');
+      console.log('Recognition started');
       isRestartingRef.current = false;
-      if (!transcript || transcript === 'Starting...') {
-        setTranscript('Listening... speak now');
-      }
+      lastRestartTimeRef.current = Date.now();
     };
   };
 
-  const restartRecognition = () => {
-    if (isRestartingRef.current) {
-      console.log('Already restarting, skipping...');
+  const attemptRestart = () => {
+    if (isRestartingRef.current || !shouldContinueRef.current) {
       return;
     }
     
     isRestartingRef.current = true;
     
-    // Clear any existing timeout
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current);
     }
     
+    // Different restart delays for mobile vs desktop
+    const restartDelay = isMobileDevice ? 500 : 100;
+    
     restartTimeoutRef.current = setTimeout(() => {
-      if (shouldContinueListeningRef.current && recognitionRef.current) {
+      if (shouldContinueRef.current && recognitionRef.current) {
         try {
-          console.log('Restarting recognition...');
+          console.log(`${isMobileDevice ? 'Mobile' : 'Desktop'}: Restarting recognition...`);
           recognitionRef.current.start();
         } catch (error) {
           console.error('Error restarting recognition:', error);
           isRestartingRef.current = false;
           
-          // If start fails, try again with a longer delay
-          if (shouldContinueListeningRef.current) {
-            setTimeout(() => {
-              if (shouldContinueListeningRef.current) {
-                restartRecognition();
-              }
-            }, 1000);
+          if (isMobileDevice) {
+            // On mobile, give up after restart failure
+            console.log('Mobile: Restart failed, stopping');
+            shouldContinueRef.current = false;
+            setIsListening(false);
+            finalizeRecording();
+          } else {
+            // On desktop, try again with longer delay
+            if (shouldContinueRef.current) {
+              setTimeout(() => {
+                if (shouldContinueRef.current) {
+                  attemptRestart();
+                }
+              }, 1000);
+            }
           }
         }
       } else {
         isRestartingRef.current = false;
       }
-    }, 100); // Short delay to prevent rapid restarts
+    }, restartDelay);
   };
 
   const startListening = () => {
     if (!recognitionRef.current || isListening) return;
     
-    console.log('Starting continuous listening...');
-    shouldContinueListeningRef.current = true;
+    console.log(`Starting ${isMobileDevice ? 'mobile' : 'desktop'} recording...`);
+    shouldContinueRef.current = true;
     setIsListening(true);
-    setTranscript('Starting...');
-    setFullTranscript('');
+    setTranscript('');
+    setAccumulatedTranscript('');
     setConfidence(0);
     
     try {
       recognitionRef.current.start();
-      logEvent('voice_recording_start', { language: selectedLanguage });
+      logEvent('voice_recording_start', { 
+        language: selectedLanguage,
+        isMobile: isMobileDevice
+      });
     } catch (error) {
       console.error('Error starting recognition:', error);
       setTranscript('Error starting voice recognition. Please try again.');
       setIsListening(false);
-      shouldContinueListeningRef.current = false;
+      shouldContinueRef.current = false;
     }
   };
 
   const stopListening = () => {
-    console.log('Stopping continuous listening...');
-    shouldContinueListeningRef.current = false; // Stop the continuous loop
+    console.log('User stopping recording...');
+    shouldContinueRef.current = false;
     
-    // Clear any pending restart
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current);
       restartTimeoutRef.current = null;
     }
     
-    // Stop the current recognition
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -244,7 +308,7 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
       }
     }
     
-    // Finalize immediately if we have content
+    // Finalize immediately
     finalizeRecording();
   };
 
@@ -252,22 +316,25 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     setIsListening(false);
     isRestartingRef.current = false;
     
-    // Send the complete transcript to the parent
-    const completeTranscript = fullTranscript + (transcript.replace(fullTranscript, '').replace('Listening... speak now', '').replace('Starting...', '').trim());
+    const completeTranscript = accumulatedTranscript.trim();
     
-    if (completeTranscript.trim()) {
-      onTranscript(completeTranscript.trim());
+    if (completeTranscript) {
+      onTranscript(completeTranscript);
       logEvent('voice_recording_complete', { 
         length: completeTranscript.length, 
-        language: selectedLanguage 
+        language: selectedLanguage,
+        isMobile: isMobileDevice
       });
     }
     
-    setFullTranscript('');
+    setAccumulatedTranscript('');
     setTranscript('');
     setConfidence(0);
     
-    logEvent('voice_recording_stop', { language: selectedLanguage });
+    logEvent('voice_recording_stop', { 
+      language: selectedLanguage,
+      isMobile: isMobileDevice
+    });
   };
 
   const toggleListening = () => {
@@ -333,14 +400,19 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           )}
         </div>
         
-        {/* Accuracy Tips */}
+        {/* Device-specific tips */}
         <div className="accuracy-tips">
           <span className="tips-icon">💡</span>
           <small>
-            {selectedLanguage.startsWith('si') 
-              ? '🔄 සත්‍ය අඛණ්ඩ පටිගැනීම: ඔබ නතර කරන තුරු ඕනෑ තරම් නිශ්ශබ්ද කාලයක් සමඟ කතා කරන්න.'
-              : '🔄 True continuous recording: Speak with unlimited pauses until you stop.'
-            }
+            {isMobileDevice ? (
+              selectedLanguage.startsWith('si') 
+                ? '📱 ජංගම: කෙටි වාක්‍ය කියන්න. දීර්ඝ නිශ්ශබ්දතාවය සඳහා නැවත ආරම්භ කරන්න.'
+                : '📱 Mobile: Speak in shorter phrases. Restart for long pauses.'
+            ) : (
+              selectedLanguage.startsWith('si') 
+                ? '🖥️ ඩෙස්ක්ටොප්: ඔබ නතර කරන තුරු අඛණ්ඩව පටිගත වේ.'
+                : '🖥️ Desktop: Records continuously until you stop.'
+            )}
           </small>
         </div>
       </div>
@@ -359,7 +431,7 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <span className="record-text">
             {isListening 
               ? (selectedLanguage.startsWith('si') ? 'පටිගත කිරීම නවත්වන්න' : 'Stop Recording')
-              : (selectedLanguage.startsWith('si') ? 'අඛණ්ඩ පටිගැනීම ආරම්භ කරන්න' : 'Start Continuous Recording')
+              : (selectedLanguage.startsWith('si') ? 'පටිගැනීම ආරම්භ කරන්න' : 'Start Recording')
             }
           </span>
         </button>
@@ -368,10 +440,15 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <div className="listening-indicator">
             <div className="pulse-dot"></div>
             <span>
-              {selectedLanguage.startsWith('si') 
-                ? '🔄 අඛණ්ඩව සවන් දෙමින්... (නිශ්ශබ්දතාවයෙන් නතර නොවේ)' 
-                : '🔄 Continuously listening... (won\'t stop on silence)'
-              }
+              {isMobileDevice ? (
+                selectedLanguage.startsWith('si') 
+                  ? '📱 ජංගම මාදිලිය...' 
+                  : '📱 Mobile mode...'
+              ) : (
+                selectedLanguage.startsWith('si') 
+                  ? '🖥️ අඛණ්ඩ මාදිලිය...' 
+                  : '🖥️ Continuous mode...'
+              )}
             </span>
             {confidence > 0 && (
               <div className="confidence-meter">

@@ -21,9 +21,14 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
   const [confidence, setConfidence] = useState(0);
   const [showLanguageDropdown, setShowLanguageDropdown] = useState(false);
   
+  // Session recording state
+  const [isInSession, setIsInSession] = useState(false);
+  const [sessionTranscript, setSessionTranscript] = useState('');
+  const [sessionParts, setSessionParts] = useState([]);
+  
   const recognitionRef = useRef(null);
   const dropdownRef = useRef(null);
-  const finalTranscriptRef = useRef(''); // Store the final result
+  const currentTranscriptRef = useRef('');
 
   // Load saved language preference
   useEffect(() => {
@@ -78,17 +83,9 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     const SpeechRecognition = getSpeechRecognition();
     recognitionRef.current = new SpeechRecognition();
     
-    // SIMPLE settings - let the browser handle it naturally
-    if (isMobile) {
-      // Mobile: Single session, no auto-restart
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = true;
-    } else {
-      // Desktop: More flexible but still simple
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-    }
-    
+    // Simple settings that work reliably
+    recognitionRef.current.continuous = isMobile ? false : true;
+    recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = selectedLanguage;
     recognitionRef.current.maxAlternatives = 1;
 
@@ -97,7 +94,6 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
       let finalTranscript = '';
       let bestConfidence = 0;
 
-      // Process results from the BEGINNING to avoid duplication
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
         const transcriptPart = result[0].transcript;
@@ -111,34 +107,26 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
         }
       }
 
-      // Simple display: final + interim (no accumulation to prevent duplication)
-      const displayText = finalTranscript + interimTranscript;
-      setTranscript(displayText);
+      const currentText = finalTranscript + interimTranscript;
+      setTranscript(currentText);
       setConfidence(bestConfidence || (interimTranscript ? 0.8 : 0));
       
-      // Store final transcript for later use
       if (finalTranscript) {
-        finalTranscriptRef.current = finalTranscript;
-        console.log('Final transcript captured:', finalTranscript);
+        currentTranscriptRef.current = finalTranscript;
       }
     };
 
     recognitionRef.current.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
-      
-      // Simple error handling
-      if (event.error === 'not-allowed') {
-        setTranscript('Microphone access denied. Please allow microphone access.');
-      } else if (event.error === 'network') {
-        setTranscript('Network error. Please check your connection.');
-      } else if (event.error === 'no-speech') {
-        setTranscript('No speech detected. Please try speaking again.');
-      } else {
-        setTranscript('Recognition error. Please try again.');
-      }
-      
-      // Always stop on error - no restart attempts
       setIsListening(false);
+      
+      if (event.error === 'not-allowed') {
+        setTranscript('Microphone access denied.');
+      } else if (event.error === 'network') {
+        setTranscript('Network error.');
+      } else {
+        setTranscript('Recognition error.');
+      }
       
       logEvent('voice_recognition_error', { 
         error: event.error,
@@ -148,92 +136,147 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     };
 
     recognitionRef.current.onend = () => {
-      console.log('Recognition ended naturally');
+      console.log('Recognition ended');
       setIsListening(false);
       
-      // Send the transcript if we have one
-      if (finalTranscriptRef.current.trim()) {
-        const finalText = finalTranscriptRef.current.trim();
-        console.log('Sending final transcript:', finalText);
-        onTranscript(finalText);
+      // Add this segment to the session if we have content
+      if (currentTranscriptRef.current.trim()) {
+        const newPart = currentTranscriptRef.current.trim();
         
-        logEvent('voice_transcript_complete', { 
-          length: finalText.length, 
-          language: selectedLanguage,
-          isMobile
-        });
+        if (isInSession) {
+          // Add to session
+          setSessionParts(prev => [...prev, newPart]);
+          setSessionTranscript(prev => {
+            const updated = prev + (prev ? ' ' : '') + newPart;
+            return updated;
+          });
+          
+          // On mobile, auto-prompt for continuation
+          if (isMobile) {
+            setTranscript('Tap Continue to add more, or Finish to save note.');
+          }
+        } else {
+          // Single recording mode - send immediately
+          onTranscript(newPart);
+          logEvent('voice_transcript_complete', { 
+            length: newPart.length, 
+            language: selectedLanguage,
+            isMobile
+          });
+        }
+      } else if (isInSession && isMobile) {
+        // No content captured but in session - prompt to continue
+        setTranscript('No speech detected. Tap Continue to try again.');
       }
       
-      // Reset for next session
-      finalTranscriptRef.current = '';
-      setTranscript('');
+      currentTranscriptRef.current = '';
       setConfidence(0);
     };
 
     recognitionRef.current.onstart = () => {
       console.log('Recognition started');
       setTranscript('Listening...');
-      finalTranscriptRef.current = '';
+      currentTranscriptRef.current = '';
     };
   };
 
-  const startListening = () => {
+  const startSingleRecording = () => {
     if (!recognitionRef.current || isListening) return;
     
-    console.log('Starting simple recording...');
     setIsListening(true);
     setTranscript('Starting...');
     setConfidence(0);
-    finalTranscriptRef.current = '';
+    currentTranscriptRef.current = '';
     
     try {
       recognitionRef.current.start();
       logEvent('voice_recording_start', { 
         language: selectedLanguage,
-        isMobile
+        isMobile,
+        mode: 'single'
       });
     } catch (error) {
       console.error('Error starting recognition:', error);
-      setTranscript('Could not start recording. Please try again.');
+      setTranscript('Could not start recording.');
       setIsListening(false);
     }
   };
 
-  const stopListening = () => {
-    console.log('Manually stopping recording...');
+  const startSession = () => {
+    setIsInSession(true);
+    setSessionTranscript('');
+    setSessionParts([]);
+    startSingleRecording();
     
-    if (recognitionRef.current && isListening) {
-      try {
-        recognitionRef.current.stop(); // This will trigger onend
-      } catch (error) {
-        console.error('Error stopping recognition:', error);
-        // Force cleanup if stop fails
-        setIsListening(false);
-        if (finalTranscriptRef.current.trim()) {
-          onTranscript(finalTranscriptRef.current.trim());
-        }
-        finalTranscriptRef.current = '';
-        setTranscript('');
-      }
-    }
-    
-    logEvent('voice_recording_stop', { 
+    logEvent('voice_session_start', { 
       language: selectedLanguage,
       isMobile
     });
   };
 
-  const toggleListening = () => {
+  const continueSession = () => {
+    if (isInSession && !isListening) {
+      startSingleRecording();
+    }
+  };
+
+  const finishSession = () => {
+    if (sessionTranscript.trim()) {
+      onTranscript(sessionTranscript.trim());
+      
+      logEvent('voice_session_complete', { 
+        length: sessionTranscript.length,
+        parts: sessionParts.length,
+        language: selectedLanguage,
+        isMobile
+      });
+    }
+    
+    // Reset session
+    setIsInSession(false);
+    setSessionTranscript('');
+    setSessionParts([]);
+    setTranscript('');
+  };
+
+  const cancelSession = () => {
     if (isListening) {
-      stopListening();
-    } else {
-      startListening();
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        // Ignore
+      }
+    }
+    
+    setIsInSession(false);
+    setSessionTranscript('');
+    setSessionParts([]);
+    setTranscript('');
+    setIsListening(false);
+    
+    logEvent('voice_session_cancel', { 
+      language: selectedLanguage,
+      isMobile
+    });
+  };
+
+  const stopListening = () => {
+    if (recognitionRef.current && isListening) {
+      try {
+        recognitionRef.current.stop();
+      } catch (error) {
+        console.error('Error stopping recognition:', error);
+        setIsListening(false);
+      }
     }
   };
 
   const handleLanguageSelect = (languageCode) => {
     if (isListening) {
       stopListening();
+    }
+    if (isInSession) {
+      cancelSession();
     }
     setSelectedLanguage(languageCode);
     setShowLanguageDropdown(false);
@@ -262,7 +305,7 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <button 
             className="language-button"
             onClick={() => setShowLanguageDropdown(!showLanguageDropdown)}
-            disabled={isListening}
+            disabled={isListening || isInSession}
           >
             <span className="language-flag">{currentLanguage.flag}</span>
             <span className="language-name">{currentLanguage.name}</span>
@@ -286,18 +329,18 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           )}
         </div>
         
-        {/* Simple, honest tips */}
+        {/* Explanation of mobile limitation */}
         <div className="accuracy-tips">
           <span className="tips-icon">💡</span>
           <small>
             {isMobile ? (
               selectedLanguage.startsWith('si') 
-                ? '📱 ජංගම: කෙටි කාලයක් සඳහා කතා කරන්න. නැවත ආරම්භ කිරීමට නැවත ක්ලික් කරන්න.'
-                : '📱 Mobile: Speak for a short time. Click again to record more.'
+                ? '📱 ජංගම: නිශ්ශබ්දතාවයෙන් පසු නතර වේ. "සැසි" භාවිතයෙන් දීර්ඝ සටහන් සඳහා.'
+                : '📱 Mobile: Stops after silence. Use "Session" for longer notes.'
             ) : (
               selectedLanguage.startsWith('si') 
-                ? '🖥️ ඩෙස්ක්ටොප්: දිගට්ම කතා කරන්න හෝ ඔබ නතර කරන තුරු.'
-                : '🖥️ Desktop: Speak continuously or until you stop.'
+                ? '🖥️ ඩෙස්ක්ටොප්: සාමාන්‍ය ශ්‍රව්‍ය සටහන්.'
+                : '🖥️ Desktop: Standard voice recording.'
             )}
           </small>
         </div>
@@ -305,22 +348,66 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
 
       {/* Recording Controls */}
       <div className="recorder-container">
-        <button
-          className={`record-button ${isListening ? 'recording' : ''}`}
-          onClick={toggleListening}
-          disabled={disabled}
-          title={isListening ? 'Stop recording' : 'Start recording'}
-        >
-          <span className="record-icon">
-            {isListening ? '⏹️' : '🎙️'}
-          </span>
-          <span className="record-text">
-            {isListening 
-              ? (selectedLanguage.startsWith('si') ? 'නවත්වන්න' : 'Stop')
-              : (selectedLanguage.startsWith('si') ? 'පටිගැනීම' : 'Record')
-            }
-          </span>
-        </button>
+        {!isInSession ? (
+          // Initial choice
+          <div className="initial-controls">
+            <button
+              className="btn btn-primary"
+              onClick={startSingleRecording}
+              disabled={disabled || isListening}
+            >
+              🎙️ {selectedLanguage.startsWith('si') ? 'ඉක්මන් පටිගැනීම' : 'Quick Record'}
+            </button>
+            
+            {isMobile && (
+              <button
+                className="btn btn-secondary"
+                onClick={startSession}
+                disabled={disabled || isListening}
+              >
+                🔗 {selectedLanguage.startsWith('si') ? 'සැසි ආරම්භ කරන්න' : 'Start Session'}
+              </button>
+            )}
+          </div>
+        ) : (
+          // Session controls
+          <div className="session-controls">
+            {isListening ? (
+              <button
+                className="record-button recording"
+                onClick={stopListening}
+                disabled={disabled}
+              >
+                ⏹️ {selectedLanguage.startsWith('si') ? 'නවත්වන්න' : 'Stop'}
+              </button>
+            ) : (
+              <div className="session-actions">
+                <button
+                  className="btn btn-primary"
+                  onClick={continueSession}
+                  disabled={disabled}
+                >
+                  ➕ {selectedLanguage.startsWith('si') ? 'දිගටම' : 'Continue'}
+                </button>
+                
+                <button
+                  className="btn btn-success"
+                  onClick={finishSession}
+                  disabled={!sessionTranscript.trim()}
+                >
+                  ✅ {selectedLanguage.startsWith('si') ? 'සම්පූර්ණ' : 'Finish'}
+                </button>
+                
+                <button
+                  className="btn btn-danger"
+                  onClick={cancelSession}
+                >
+                  ❌ {selectedLanguage.startsWith('si') ? 'අවලංගු' : 'Cancel'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         
         {isListening && (
           <div className="listening-indicator">
@@ -341,22 +428,112 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
         )}
       </div>
       
+      {/* Session Progress */}
+      {isInSession && sessionParts.length > 0 && (
+        <div className="session-progress">
+          <div className="session-info">
+            <span className="session-label">
+              {selectedLanguage.startsWith('si') ? 'සැසි:' : 'Session:'} {sessionParts.length} {selectedLanguage.startsWith('si') ? 'කොටස්' : 'parts'}
+            </span>
+          </div>
+          <div className="session-preview">
+            {sessionTranscript}
+          </div>
+        </div>
+      )}
+      
       {/* Live Transcript */}
-      {transcript && transcript !== 'Starting...' && (
+      {transcript && transcript !== 'Starting...' && !isInSession && (
         <div className="transcript-preview">
           <label>
             {selectedLanguage.startsWith('si') ? 'සජීවී පිටපත:' : 'Live Transcript:'}
           </label>
           <p className={selectedLanguage.startsWith('si') ? 'sinhala-text' : ''}>{transcript}</p>
-          {confidence > 0 && (
-            <div className="confidence-info">
-              <span className="confidence-label">
-                {selectedLanguage.startsWith('si') ? 'විශ්වාසනීයත්වය:' : 'Confidence:'} {Math.round(confidence * 100)}%
-              </span>
-            </div>
-          )}
         </div>
       )}
+      
+      {/* Session transcript during recording */}
+      {transcript && transcript !== 'Starting...' && isInSession && (
+        <div className="transcript-preview">
+          <label>
+            {selectedLanguage.startsWith('si') ? 'වර්තමාන කොටස:' : 'Current Part:'}
+          </label>
+          <p className={selectedLanguage.startsWith('si') ? 'sinhala-text' : ''}>{transcript}</p>
+        </div>
+      )}
+      
+      <style jsx>{`
+        .initial-controls {
+          display: flex;
+          gap: var(--spacing-sm);
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        
+        .session-controls {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: var(--spacing-md);
+        }
+        
+        .session-actions {
+          display: flex;
+          gap: var(--spacing-sm);
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        
+        .session-progress {
+          margin-top: var(--spacing-md);
+          padding: var(--spacing-md);
+          background: var(--secondary-bg);
+          border-radius: var(--radius-md);
+          border-left: 3px solid var(--accent-color);
+        }
+        
+        .session-info {
+          margin-bottom: var(--spacing-sm);
+        }
+        
+        .session-label {
+          font-size: var(--font-size-sm);
+          color: var(--text-secondary);
+          font-weight: 600;
+        }
+        
+        .session-preview {
+          font-style: italic;
+          color: var(--text-primary);
+          line-height: 1.6;
+        }
+        
+        .btn-secondary {
+          background: var(--secondary-bg);
+          color: var(--text-primary);
+          border: 1px solid var(--border-color);
+        }
+        
+        .btn-secondary:hover {
+          background: var(--card-hover-bg);
+          border-color: var(--accent-color);
+        }
+        
+        @media (max-width: 768px) {
+          .initial-controls {
+            flex-direction: column;
+          }
+          
+          .session-actions {
+            flex-direction: column;
+            width: 100%;
+          }
+          
+          .session-actions button {
+            width: 100%;
+          }
+        }
+      `}</style>
     </div>
   );
 };

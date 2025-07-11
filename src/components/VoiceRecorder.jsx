@@ -19,6 +19,8 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
   const [showLanguageDropdown, setShowLanguageDropdown] = useState(false);
   const recognitionRef = useRef(null);
   const dropdownRef = useRef(null);
+  const isManualStopRef = useRef(false); // Track if user manually stopped
+  const restartTimeoutRef = useRef(null); // For handling restart delays
 
   // Load saved language preference
   useEffect(() => {
@@ -54,6 +56,9 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+      }
     };
   }, [selectedLanguage, onTranscript]);
 
@@ -61,14 +66,11 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     const SpeechRecognition = getSpeechRecognition();
     recognitionRef.current = new SpeechRecognition();
     
-    // Enhanced configuration for better accuracy
+    // Enhanced configuration for continuous listening
     recognitionRef.current.continuous = true;
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = selectedLanguage;
-    recognitionRef.current.maxAlternatives = 3; // Get multiple alternatives
-    
-    // Note: We don't set grammars property as it can cause errors
-    // The browser will use default grammar which works fine for all languages
+    recognitionRef.current.maxAlternatives = 3;
 
     recognitionRef.current.onresult = (event) => {
       let finalTranscript = '';
@@ -104,26 +106,56 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
 
     recognitionRef.current.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
-      setIsListening(false);
+      
       logEvent('voice_recognition_error', { 
         error: event.error,
         language: selectedLanguage 
       });
       
-      // Provide user-friendly error messages
+      // Handle different types of errors
       if (event.error === 'no-speech') {
-        setTranscript('No speech detected. Please try speaking closer to the microphone.');
+        // Don't stop for no-speech errors, just continue listening
+        setTranscript('Waiting for speech...');
       } else if (event.error === 'network') {
         setTranscript('Network error. Please check your internet connection.');
+        setIsListening(false);
+        isManualStopRef.current = true; // Stop on network errors
+      } else if (event.error === 'not-allowed') {
+        setTranscript('Microphone access denied. Please allow microphone access.');
+        setIsListening(false);
+        isManualStopRef.current = true; // Stop on permission errors
+      } else {
+        // For other errors, try to restart if we're still supposed to be listening
+        console.log('Speech recognition error, but continuing...', event.error);
       }
     };
 
     recognitionRef.current.onend = () => {
-      setIsListening(false);
-      setConfidence(0);
+      console.log('Speech recognition ended. Manual stop:', isManualStopRef.current);
+      
+      // Only truly stop if it was a manual stop
+      if (isManualStopRef.current) {
+        setIsListening(false);
+        setConfidence(0);
+        isManualStopRef.current = false; // Reset the flag
+      } else {
+        // Automatically restart if it wasn't a manual stop
+        console.log('Auto-restarting speech recognition...');
+        restartTimeoutRef.current = setTimeout(() => {
+          if (recognitionRef.current && isListening) {
+            try {
+              recognitionRef.current.start();
+            } catch (error) {
+              console.error('Error restarting recognition:', error);
+              setIsListening(false);
+            }
+          }
+        }, 100); // Small delay to prevent rapid restart loops
+      }
     };
 
     recognitionRef.current.onstart = () => {
+      console.log('Speech recognition started');
       setTranscript('');
       setConfidence(0);
     };
@@ -133,15 +165,30 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     if (recognitionRef.current && !isListening) {
       setTranscript('');
       setConfidence(0);
-      recognitionRef.current.start();
-      setIsListening(true);
-      logEvent('voice_recording_start', { language: selectedLanguage });
+      isManualStopRef.current = false; // Reset manual stop flag
+      
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+        logEvent('voice_recording_start', { language: selectedLanguage });
+      } catch (error) {
+        console.error('Error starting recognition:', error);
+        setTranscript('Error starting voice recognition. Please try again.');
+      }
     }
   };
 
   const stopListening = () => {
     if (recognitionRef.current && isListening) {
+      isManualStopRef.current = true; // Mark as manual stop
       recognitionRef.current.stop();
+      
+      // Clear any pending restart
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+        restartTimeoutRef.current = null;
+      }
+      
       setIsListening(false);
       logEvent('voice_recording_stop', { language: selectedLanguage });
     }
@@ -215,8 +262,8 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <span className="tips-icon">💡</span>
           <small>
             {selectedLanguage.startsWith('si') 
-              ? 'සිංහල: පැහැදිලිව හා සෙමින් කතා කරන්න. නිශ්ශබ්ද ස්ථානයක සිටින්න.'
-              : 'Speak clearly and at normal pace. Use in a quiet environment for best results.'
+              ? 'සිංහල: දැන් ඔබට ඕනෑ තරම් නැවතීම් සමඟ කතා කළ හැක. ඔබ නැවැත්වීම ඔබන තුරු පටිගත වේ.'
+              : 'You can now speak with pauses. Recording will continue until you click stop.'
             }
           </small>
         </div>
@@ -245,7 +292,7 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <div className="listening-indicator">
             <div className="pulse-dot"></div>
             <span>
-              {selectedLanguage.startsWith('si') ? 'සවන් දෙමින්...' : 'Listening...'}
+              {selectedLanguage.startsWith('si') ? 'සවන් දෙමින්... (ඔබ නතර කරන තුරු)' : 'Listening... (until you stop)'}
             </span>
             {confidence > 0 && (
               <div className="confidence-meter">

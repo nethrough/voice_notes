@@ -1,7 +1,7 @@
 // File: /src/App.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from './components/Header';
-import VoiceRecorder from './components/VoiceRecorder';
+import WhisperVoiceRecorder from './components/WhisperVoiceRecorder';
 import NoteCard from './components/NoteCard';
 import { 
   generateId, 
@@ -26,7 +26,7 @@ function App() {
     const savedNotes = storage.get(NOTES_STORAGE_KEY, []);
     setNotes(savedNotes);
     setIsLoading(false);
-    logEvent('app_loaded', { notesCount: savedNotes.length });
+    logEvent('app_loaded', { notesCount: savedNotes.length, apiType: 'whisper' });
   }, []);
 
   // Save notes to localStorage whenever notes change
@@ -43,7 +43,7 @@ function App() {
     }
   }, [notes, saveNotes, isLoading]);
 
-  // Handle voice transcript
+  // Handle voice transcript from Whisper
   const handleTranscript = (transcript) => {
     if (transcript.trim()) {
       const newNote = {
@@ -51,10 +51,11 @@ function App() {
         title: '',
         content: transcript.trim(),
         createdAt: Date.now(),
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        source: 'whisper' // Mark as Whisper-generated
       };
       setNotes(prev => [newNote, ...prev]);
-      logEvent('note_created_voice', { contentLength: transcript.length });
+      logEvent('note_created_whisper', { contentLength: transcript.length });
     }
   };
 
@@ -65,7 +66,8 @@ function App() {
       title: 'New Note',
       content: '',
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      source: 'manual'
     };
     setNotes(prev => [newNote, ...prev]);
     logEvent('note_created_manual');
@@ -74,7 +76,7 @@ function App() {
   // Update existing note
   const updateNote = (id, updates) => {
     setNotes(prev => prev.map(note => 
-      note.id === id ? { ...note, ...updates } : note
+      note.id === id ? { ...note, ...updates, updatedAt: Date.now() } : note
     ));
     logEvent('note_updated', { noteId: id });
   };
@@ -89,9 +91,9 @@ function App() {
   const handleExport = (format) => {
     const filteredNotes = getFilteredNotes();
     const content = formatNotesForExport(filteredNotes, format);
-    const filename = `voice-notes-${new Date().toISOString().split('T')[0]}.${format}`;
+    const filename = `voice-notes-whisper-${new Date().toISOString().split('T')[0]}.${format}`;
     exportToFile(content, filename, format === 'md' ? 'text/markdown' : 'text/plain');
-    logEvent('notes_exported', { format, count: filteredNotes.length });
+    logEvent('notes_exported', { format, count: filteredNotes.length, apiType: 'whisper' });
   };
 
   // Filter notes based on search term
@@ -124,9 +126,9 @@ function App() {
       
       <main className="main-content">
         <div className="container">
-          {/* Voice Recorder Section */}
+          {/* Whisper Voice Recorder Section */}
           <section className="recorder-section">
-            <VoiceRecorder onTranscript={handleTranscript} />
+            <WhisperVoiceRecorder onTranscript={handleTranscript} />
           </section>
 
           {/* Search and Create Section */}
@@ -153,9 +155,10 @@ function App() {
               <div className="empty-state">
                 {notes.length === 0 ? (
                   <div className="empty-content">
-                    <span className="empty-icon">📝</span>
+                    <span className="empty-icon">🎙️</span>
                     <h2>No notes yet</h2>
-                    <p>Start by recording your first voice note or create a new note manually.</p>
+                    <p>Start by recording your first English voice note with Whisper AI or create a new note manually.</p>
+                    <small>✨ Powered by OpenAI Whisper for professional English transcription</small>
                   </div>
                 ) : (
                   <div className="empty-content">

@@ -717,3 +717,72 @@ button:focus-visible {
     text-align: center;
   }
 }
+/* Whisper Voice Recorder Styles */
+.whisper-info {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-xs);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  margin-top: var(--spacing-sm);
+}
+
+.info-icon {
+  font-size: var(--font-size-sm);
+  margin-top: 1px;
+}
+
+.whisper-info small {
+  line-height: 1.4;
+  font-size: var(--font-size-xs);
+}
+
+.record-button.processing {
+  background: #6c757d;
+  cursor: not-allowed;
+}
+
+.recording-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  animation: fadeIn 0.3s ease-in;
+}
+
+.processing-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-color);
+  border-top: 2px solid var(--accent-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.whisper-badge {
+  font-size: var(--font-size-xs);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}

@@ -29,16 +29,6 @@ export const truncateText = (text, maxLength = 150) => {
   return text.substr(0, maxLength).trim() + '...';
 };
 
-// Check if Web Speech API is supported
-export const isWebSpeechSupported = () => {
-  return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-};
-
-// Get speech recognition constructor
-export const getSpeechRecognition = () => {
-  return window.SpeechRecognition || window.webkitSpeechRecognition;
-};
-
 // Local storage helpers
 export const storage = {
   get: (key, defaultValue = null) => {
@@ -90,14 +80,16 @@ export const formatNotesForExport = (notes, format = 'txt') => {
   if (format === 'md') {
     return notes.map(note => {
       const date = new Date(note.createdAt).toLocaleDateString();
-      return `# ${note.title || 'Untitled Note'}\n\n*Created: ${date}*\n\n${note.content}\n\n---\n`;
+      const source = note.source === 'whisper' ? ' (🤖 Whisper AI)' : '';
+      return `# ${note.title || 'Untitled Note'}${source}\n\n*Created: ${date}*\n\n${note.content}\n\n---\n`;
     }).join('\n');
   }
   
   // Default to plain text
   return notes.map(note => {
     const date = new Date(note.createdAt).toLocaleDateString();
-    return `${note.title || 'Untitled Note'}\nCreated: ${date}\n\n${note.content}\n\n${'='.repeat(50)}\n`;
+    const source = note.source === 'whisper' ? ' (Whisper AI)' : '';
+    return `${note.title || 'Untitled Note'}${source}\nCreated: ${date}\n\n${note.content}\n\n${'='.repeat(50)}\n`;
   }).join('\n');
 };
 
@@ -117,37 +109,27 @@ export const debounce = (func, wait) => {
 // Detect if we're in development mode
 const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
 
-// Log to server (optional analytics) - gracefully handle missing API
+// Log events (enhanced for Whisper)
 export const logEvent = async (event, data = {}) => {
   // In development, just log to console
   if (isDevelopment) {
     console.log('📊 Analytics Event:', {
       event,
-      data,
+      data: { ...data, apiType: 'whisper' },
       timestamp: new Date().toISOString(),
     });
     return;
   }
 
-  // In production, try to send to server
+  // In production, you could send to your analytics service
   try {
-    const response = await fetch('/api/log', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        event,
-        data,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+    // Example: send to your own analytics endpoint
+    // await fetch('/api/analytics', {
+    //   method: 'POST',
+    //   headers: { 'Content-Type': 'application/json' },
+    //   body: JSON.stringify({ event, data, timestamp: new Date().toISOString() })
+    // });
   } catch (error) {
-    // Silently fail in production, log in development
     if (isDevelopment) {
       console.warn('Analytics logging failed:', error.message);
     }

@@ -17,7 +17,7 @@ const Header = ({ onExport, notesCount }) => {
           <div className="logo-section">
             <h1 className="logo">
               <span className="logo-icon">🎙️</span>
-              Voice Notes
+              Voice Notes AI
             </h1>
             <span className="notes-count">
               {notesCount} {notesCount === 1 ? 'note' : 'notes'}

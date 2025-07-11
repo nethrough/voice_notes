@@ -7,16 +7,10 @@ const NoteCard = ({ note, onUpdate, onDelete }) => {
   const [editTitle, setEditTitle] = useState(note.title || '');
   const [editContent, setEditContent] = useState(note.content);
 
-  // Detect if content contains Sinhala characters
-  const containsSinhala = (text) => {
-    return /[\u0D80-\u0DFF]/.test(text);
-  };
-
   const handleSave = () => {
     onUpdate(note.id, {
       title: editTitle.trim() || 'Untitled Note',
       content: editContent.trim(),
-      updatedAt: Date.now()
     });
     setIsEditing(false);
   };
@@ -35,8 +29,7 @@ const NoteCard = ({ note, onUpdate, onDelete }) => {
 
   const displayTitle = note.title || 'Untitled Note';
   const displayDate = formatDate(note.updatedAt || note.createdAt);
-  const isSinhalaContent = containsSinhala(note.content);
-  const isSinhalaTitle = containsSinhala(displayTitle);
+  const isWhisperGenerated = note.source === 'whisper';
 
   return (
     <div className="note-card">
@@ -44,14 +37,14 @@ const NoteCard = ({ note, onUpdate, onDelete }) => {
         <div className="edit-mode">
           <input
             type="text"
-            className={`input title-input ${containsSinhala(editTitle) ? 'sinhala-text' : ''}`}
+            className="input title-input"
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
             placeholder="Note title..."
             autoFocus
           />
           <textarea
-            className={`input textarea content-input ${containsSinhala(editContent) ? 'sinhala-text' : ''}`}
+            className="input textarea content-input"
             value={editContent}
             onChange={(e) => setEditContent(e.target.value)}
             placeholder="Note content..."
@@ -69,16 +62,14 @@ const NoteCard = ({ note, onUpdate, onDelete }) => {
       ) : (
         <div className="view-mode">
           <div className="note-header">
-            <h3 className={`note-title ${isSinhalaTitle ? 'sinhala-text' : ''}`}>
-              {displayTitle}
-            </h3>
+            <h3 className="note-title">{displayTitle}</h3>
             <div className="note-meta">
               <span className="note-date">{displayDate}</span>
-              {isSinhalaContent && <span className="language-badge">🇱🇰 SI</span>}
+              {isWhisperGenerated && <span className="whisper-badge">🤖 AI</span>}
             </div>
           </div>
           <div className="note-content">
-            <p className={isSinhalaContent ? 'sinhala-text' : ''}>{note.content}</p>
+            <p>{note.content}</p>
           </div>
           <div className="note-actions">
             <button 

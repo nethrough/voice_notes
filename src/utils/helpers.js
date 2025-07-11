@@ -114,10 +114,24 @@ export const debounce = (func, wait) => {
   };
 };
 
-// Log to server (optional analytics)
+// Detect if we're in development mode
+const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
+
+// Log to server (optional analytics) - gracefully handle missing API
 export const logEvent = async (event, data = {}) => {
+  // In development, just log to console
+  if (isDevelopment) {
+    console.log('📊 Analytics Event:', {
+      event,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  // In production, try to send to server
   try {
-    await fetch('/api/log', {
+    const response = await fetch('/api/log', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -128,7 +142,14 @@ export const logEvent = async (event, data = {}) => {
         timestamp: new Date().toISOString(),
       }),
     });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
   } catch (error) {
-    console.log('Analytics logging failed:', error);
+    // Silently fail in production, log in development
+    if (isDevelopment) {
+      console.warn('Analytics logging failed:', error.message);
+    }
   }
 };

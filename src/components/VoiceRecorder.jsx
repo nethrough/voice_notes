@@ -17,10 +17,13 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
   const [selectedLanguage, setSelectedLanguage] = useState('en-US');
   const [confidence, setConfidence] = useState(0);
   const [showLanguageDropdown, setShowLanguageDropdown] = useState(false);
+  const [fullTranscript, setFullTranscript] = useState(''); // Store complete transcript
+  
   const recognitionRef = useRef(null);
   const dropdownRef = useRef(null);
-  const isManualStopRef = useRef(false); // Track if user manually stopped
-  const restartTimeoutRef = useRef(null); // For handling restart delays
+  const shouldContinueListeningRef = useRef(false); // Flag to control continuous listening
+  const restartTimeoutRef = useRef(null);
+  const isRestartingRef = useRef(false); // Prevent multiple restarts
 
   // Load saved language preference
   useEffect(() => {
@@ -53,8 +56,13 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     }
 
     return () => {
+      shouldContinueListeningRef.current = false;
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          // Ignore errors on cleanup
+        }
       }
       if (restartTimeoutRef.current) {
         clearTimeout(restartTimeoutRef.current);
@@ -66,18 +74,19 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
     const SpeechRecognition = getSpeechRecognition();
     recognitionRef.current = new SpeechRecognition();
     
-    // Enhanced configuration for continuous listening
+    // Configuration for speech recognition
     recognitionRef.current.continuous = true;
     recognitionRef.current.interimResults = true;
     recognitionRef.current.lang = selectedLanguage;
-    recognitionRef.current.maxAlternatives = 3;
+    recognitionRef.current.maxAlternatives = 1;
 
     recognitionRef.current.onresult = (event) => {
-      let finalTranscript = '';
       let interimTranscript = '';
+      let finalTranscript = '';
       let bestConfidence = 0;
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      // Process all results
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
         const transcriptPart = result[0].transcript;
         const confidence = result[0].confidence || 0;
@@ -90,13 +99,17 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
         }
       }
 
-      const fullTranscript = finalTranscript || interimTranscript;
-      setTranscript(fullTranscript);
-      setConfidence(bestConfidence);
+      // Update the display transcript (interim + any new final)
+      const displayTranscript = fullTranscript + finalTranscript + interimTranscript;
+      setTranscript(displayTranscript);
+      setConfidence(bestConfidence || (interimTranscript ? 0.8 : 0));
       
+      // If we have final transcript, add it to our full transcript
       if (finalTranscript) {
-        onTranscript(finalTranscript);
-        logEvent('voice_transcript_complete', { 
+        const newFullTranscript = fullTranscript + finalTranscript;
+        setFullTranscript(newFullTranscript);
+        // Don't call onTranscript yet - wait until user stops recording
+        logEvent('voice_transcript_partial', { 
           length: finalTranscript.length, 
           language: selectedLanguage,
           confidence: bestConfidence 
@@ -112,86 +125,149 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
         language: selectedLanguage 
       });
       
-      // Handle different types of errors
-      if (event.error === 'no-speech') {
-        // Don't stop for no-speech errors, just continue listening
-        setTranscript('Waiting for speech...');
+      // Handle different error types
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setTranscript('Microphone access denied. Please allow microphone access and try again.');
+        shouldContinueListeningRef.current = false;
+        setIsListening(false);
       } else if (event.error === 'network') {
-        setTranscript('Network error. Please check your internet connection.');
-        setIsListening(false);
-        isManualStopRef.current = true; // Stop on network errors
-      } else if (event.error === 'not-allowed') {
-        setTranscript('Microphone access denied. Please allow microphone access.');
-        setIsListening(false);
-        isManualStopRef.current = true; // Stop on permission errors
+        setTranscript('Network error. Trying to reconnect...');
+        // Try to restart on network errors
+        if (shouldContinueListeningRef.current) {
+          restartRecognition();
+        }
       } else {
-        // For other errors, try to restart if we're still supposed to be listening
-        console.log('Speech recognition error, but continuing...', event.error);
+        // For other errors, just try to continue
+        console.log('Non-critical error, continuing...', event.error);
+        if (shouldContinueListeningRef.current && !isRestartingRef.current) {
+          restartRecognition();
+        }
       }
     };
 
     recognitionRef.current.onend = () => {
-      console.log('Speech recognition ended. Manual stop:', isManualStopRef.current);
+      console.log('Recognition ended. Should continue:', shouldContinueListeningRef.current);
       
-      // Only truly stop if it was a manual stop
-      if (isManualStopRef.current) {
-        setIsListening(false);
-        setConfidence(0);
-        isManualStopRef.current = false; // Reset the flag
-      } else {
-        // Automatically restart if it wasn't a manual stop
-        console.log('Auto-restarting speech recognition...');
-        restartTimeoutRef.current = setTimeout(() => {
-          if (recognitionRef.current && isListening) {
-            try {
-              recognitionRef.current.start();
-            } catch (error) {
-              console.error('Error restarting recognition:', error);
-              setIsListening(false);
-            }
-          }
-        }, 100); // Small delay to prevent rapid restart loops
+      // If we should continue listening and we're not already restarting, restart immediately
+      if (shouldContinueListeningRef.current && !isRestartingRef.current) {
+        console.log('Auto-restarting recognition to maintain continuous listening...');
+        restartRecognition();
+      } else if (!shouldContinueListeningRef.current) {
+        // User stopped, finalize the session
+        finalizeRecording();
       }
     };
 
     recognitionRef.current.onstart = () => {
       console.log('Speech recognition started');
-      setTranscript('');
-      setConfidence(0);
+      isRestartingRef.current = false;
+      if (!transcript || transcript === 'Starting...') {
+        setTranscript('Listening... speak now');
+      }
     };
   };
 
-  const startListening = () => {
-    if (recognitionRef.current && !isListening) {
-      setTranscript('');
-      setConfidence(0);
-      isManualStopRef.current = false; // Reset manual stop flag
-      
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-        logEvent('voice_recording_start', { language: selectedLanguage });
-      } catch (error) {
-        console.error('Error starting recognition:', error);
-        setTranscript('Error starting voice recognition. Please try again.');
+  const restartRecognition = () => {
+    if (isRestartingRef.current) {
+      console.log('Already restarting, skipping...');
+      return;
+    }
+    
+    isRestartingRef.current = true;
+    
+    // Clear any existing timeout
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+    }
+    
+    restartTimeoutRef.current = setTimeout(() => {
+      if (shouldContinueListeningRef.current && recognitionRef.current) {
+        try {
+          console.log('Restarting recognition...');
+          recognitionRef.current.start();
+        } catch (error) {
+          console.error('Error restarting recognition:', error);
+          isRestartingRef.current = false;
+          
+          // If start fails, try again with a longer delay
+          if (shouldContinueListeningRef.current) {
+            setTimeout(() => {
+              if (shouldContinueListeningRef.current) {
+                restartRecognition();
+              }
+            }, 1000);
+          }
+        }
+      } else {
+        isRestartingRef.current = false;
       }
+    }, 100); // Short delay to prevent rapid restarts
+  };
+
+  const startListening = () => {
+    if (!recognitionRef.current || isListening) return;
+    
+    console.log('Starting continuous listening...');
+    shouldContinueListeningRef.current = true;
+    setIsListening(true);
+    setTranscript('Starting...');
+    setFullTranscript('');
+    setConfidence(0);
+    
+    try {
+      recognitionRef.current.start();
+      logEvent('voice_recording_start', { language: selectedLanguage });
+    } catch (error) {
+      console.error('Error starting recognition:', error);
+      setTranscript('Error starting voice recognition. Please try again.');
+      setIsListening(false);
+      shouldContinueListeningRef.current = false;
     }
   };
 
   const stopListening = () => {
-    if (recognitionRef.current && isListening) {
-      isManualStopRef.current = true; // Mark as manual stop
-      recognitionRef.current.stop();
-      
-      // Clear any pending restart
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current);
-        restartTimeoutRef.current = null;
-      }
-      
-      setIsListening(false);
-      logEvent('voice_recording_stop', { language: selectedLanguage });
+    console.log('Stopping continuous listening...');
+    shouldContinueListeningRef.current = false; // Stop the continuous loop
+    
+    // Clear any pending restart
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
     }
+    
+    // Stop the current recognition
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (error) {
+        console.error('Error stopping recognition:', error);
+      }
+    }
+    
+    // Finalize immediately if we have content
+    finalizeRecording();
+  };
+
+  const finalizeRecording = () => {
+    setIsListening(false);
+    isRestartingRef.current = false;
+    
+    // Send the complete transcript to the parent
+    const completeTranscript = fullTranscript + (transcript.replace(fullTranscript, '').replace('Listening... speak now', '').replace('Starting...', '').trim());
+    
+    if (completeTranscript.trim()) {
+      onTranscript(completeTranscript.trim());
+      logEvent('voice_recording_complete', { 
+        length: completeTranscript.length, 
+        language: selectedLanguage 
+      });
+    }
+    
+    setFullTranscript('');
+    setTranscript('');
+    setConfidence(0);
+    
+    logEvent('voice_recording_stop', { language: selectedLanguage });
   };
 
   const toggleListening = () => {
@@ -262,8 +338,8 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <span className="tips-icon">💡</span>
           <small>
             {selectedLanguage.startsWith('si') 
-              ? 'සිංහල: දැන් ඔබට ඕනෑ තරම් නැවතීම් සමඟ කතා කළ හැක. ඔබ නැවැත්වීම ඔබන තුරු පටිගත වේ.'
-              : 'You can now speak with pauses. Recording will continue until you click stop.'
+              ? '🔄 සත්‍ය අඛණ්ඩ පටිගැනීම: ඔබ නතර කරන තුරු ඕනෑ තරම් නිශ්ශබ්ද කාලයක් සමඟ කතා කරන්න.'
+              : '🔄 True continuous recording: Speak with unlimited pauses until you stop.'
             }
           </small>
         </div>
@@ -283,7 +359,7 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <span className="record-text">
             {isListening 
               ? (selectedLanguage.startsWith('si') ? 'පටිගත කිරීම නවත්වන්න' : 'Stop Recording')
-              : (selectedLanguage.startsWith('si') ? 'පටිගත කිරීම ආරම්භ කරන්න' : 'Start Recording')
+              : (selectedLanguage.startsWith('si') ? 'අඛණ්ඩ පටිගැනීම ආරම්භ කරන්න' : 'Start Continuous Recording')
             }
           </span>
         </button>
@@ -292,7 +368,10 @@ const VoiceRecorder = ({ onTranscript, disabled = false }) => {
           <div className="listening-indicator">
             <div className="pulse-dot"></div>
             <span>
-              {selectedLanguage.startsWith('si') ? 'සවන් දෙමින්... (ඔබ නතර කරන තුරු)' : 'Listening... (until you stop)'}
+              {selectedLanguage.startsWith('si') 
+                ? '🔄 අඛණ්ඩව සවන් දෙමින්... (නිශ්ශබ්දතාවයෙන් නතර නොවේ)' 
+                : '🔄 Continuously listening... (won\'t stop on silence)'
+              }
             </span>
             {confidence > 0 && (
               <div className="confidence-meter">

@@ -12,11 +12,13 @@ const SUPPORTED_LANGUAGES = [
   { code: 'en-ca', name: 'English (Canada)', flag: '🇨🇦', whisperCode: 'en' },
 ];
 
+const DEFAULT_LANGUAGE = 'en'; // Fallback language
+
 const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isSupported, setIsSupported] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState('en');
+  const [selectedLanguage, setSelectedLanguage] = useState(DEFAULT_LANGUAGE);
   const [showLanguageDropdown, setShowLanguageDropdown] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -27,10 +29,21 @@ const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
   const dropdownRef = useRef(null);
   const timerRef = useRef(null);
 
-  // Load saved language preference
+  // Load saved language preference with fallback
   useEffect(() => {
-    const savedLanguage = storage.get(LANGUAGE_STORAGE_KEY, 'en');
-    setSelectedLanguage(savedLanguage);
+    const savedLanguage = storage.get(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE);
+    
+    // Check if saved language exists in current supported languages
+    const isValidLanguage = SUPPORTED_LANGUAGES.some(lang => lang.code === savedLanguage);
+    
+    if (isValidLanguage) {
+      setSelectedLanguage(savedLanguage);
+    } else {
+      // If saved language is not supported anymore, use default and clear storage
+      console.log('Saved language not supported, switching to default:', savedLanguage, '→', DEFAULT_LANGUAGE);
+      setSelectedLanguage(DEFAULT_LANGUAGE);
+      storage.set(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE);
+    }
   }, []);
 
   // Save language preference when changed
@@ -260,7 +273,8 @@ const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const currentLanguage = SUPPORTED_LANGUAGES.find(lang => lang.code === selectedLanguage);
+  // Get current language with fallback
+  const currentLanguage = SUPPORTED_LANGUAGES.find(lang => lang.code === selectedLanguage) || SUPPORTED_LANGUAGES[0];
 
   if (!isSupported) {
     return (
@@ -310,7 +324,7 @@ const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
         <div className="whisper-info">
           <span className="info-icon">🤖</span>
           <small>
-            Powered by OpenAI Whisper
+            Powered by OpenAI Whisper - Perfect for English speech recognition with continuous recording on all devices.
           </small>
         </div>
       </div>
@@ -338,7 +352,7 @@ const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
         {isRecording && (
           <div className="recording-indicator">
             <div className="pulse-dot"></div>
-            <span>🎤 Recording - Speak in English 🚀</span>
+            <span>🎤 Recording continuously - Speak in English 🚀</span>
           </div>
         )}
         

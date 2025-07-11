@@ -324,7 +324,7 @@ const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
         <div className="whisper-info">
           <span className="info-icon">🤖</span>
           <small>
-            Powered by OpenAI Whisper - Perfect for English speech recognition with continuous recording on all devices.
+            Powered by OpenAI Whisper - Perfect for English speech recognition.
           </small>
         </div>
       </div>
@@ -352,7 +352,7 @@ const WhisperVoiceRecorder = ({ onTranscript, disabled = false }) => {
         {isRecording && (
           <div className="recording-indicator">
             <div className="pulse-dot"></div>
-            <span>🎤 Recording continuously - Speak in English 🚀</span>
+            <span>🎤 Recording Speak in English 🚀</span>
           </div>
         )}
         

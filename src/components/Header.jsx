@@ -17,12 +17,17 @@ const Header = ({ onExport, notesCount }) => {
           <div className="logo-section">
             <h1 className="logo">
               <span className="logo-icon">🎙️</span>
-              Voice Notes AI
+              <div className="logo-text">
+                <span className="app-name">Voice Notes AI</span>
+                <span className="app-tagline">Powered by Whisper</span>
+              </div>
             </h1>
             <span className="notes-count">
               {notesCount} {notesCount === 1 ? 'note' : 'notes'}
             </span>
           </div>
+          
+
           
           {notesCount > 0 && (
             <div className="export-buttons">

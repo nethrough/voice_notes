@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Header from './components/Header';
 import WhisperVoiceRecorder from './components/WhisperVoiceRecorder';
 import NoteCard from './components/NoteCard';
+import DeveloperFooter from './components/DeveloperFooter';
 import { 
   generateId, 
   storage, 
@@ -124,6 +125,8 @@ function App() {
     <div className="app">
       <Header onExport={handleExport} notesCount={notes.length} />
       
+
+      
       <main className="main-content">
         <div className="container">
           {/* Whisper Voice Recorder Section */}
@@ -158,7 +161,7 @@ function App() {
                     <span className="empty-icon">🎙️</span>
                     <h2>No notes yet</h2>
                     <p>Start by recording your first English voice note with Whisper AI or create a new note manually.</p>
-                    <small>✨ Powered by OpenAI Whisper for professional English transcription</small>
+                    <small>✨ Professional voice-to-text powered by OpenAI Whisper</small>
                   </div>
                 ) : (
                   <div className="empty-content">
@@ -183,6 +186,9 @@ function App() {
           </section>
         </div>
       </main>
+      
+      {/* Developer Footer */}
+      <DeveloperFooter />
     </div>
   );
 }
